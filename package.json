@@ -8,6 +8,7 @@
   },
   "scripts": {
     "test": "mocha",
+    "create-regtest-fixed-proof": "node scripts/create-regtest-fixed-proof.js",
     "format:fix": "prettier --write ./**/*.js",
     "format:check": "prettier --check ./**/*.js"
   },
