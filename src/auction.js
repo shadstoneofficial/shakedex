@@ -36,6 +36,62 @@ linearReductionStrategy.strategyName = 'LINEAR';
 
 exports.linearReductionStrategy = linearReductionStrategy;
 
+async function createFixedPriceAuction(options) {
+  const {
+    context,
+    lockFinalize,
+    price,
+    lockTime,
+    paymentAddr,
+    feeRate,
+    feeAddr,
+  } = options;
+
+  assert(context);
+  assert(lockFinalize);
+  assert(typeof price === 'number' && price > 0);
+  assert(typeof lockTime === 'number' && lockTime >= 0);
+  assert(typeof feeRate === 'number' && feeRate >= 0 && feeRate <= 10000);
+  if (feeRate > 0 && !feeAddr) {
+    throw new Error('Must specify a fee address if feeRate > 0.');
+  }
+
+  const payTo = paymentAddr || (await context.wallet.createAddress('default')).address;
+  const fee = Math.floor((feeRate / 10000) * price);
+  const swapProof = new SwapProof({
+    lockingTxHash: lockFinalize.finalizeTxHash,
+    lockingOutputIdx: lockFinalize.finalizeOutputIdx,
+    name: lockFinalize.name,
+    publicKey: lockFinalize.publicKey,
+    paymentAddr: payTo,
+    price,
+    lockTime,
+    feeAddr,
+    fee,
+  });
+  await swapProof.sign(context, lockFinalize.privateKey);
+
+  return new Auction({
+    version: CURRENT_PROTOCOL_VERSION,
+    name: lockFinalize.name,
+    lockingTxHash: lockFinalize.finalizeTxHash,
+    lockingOutputIdx: lockFinalize.finalizeOutputIdx,
+    publicKey: lockFinalize.publicKey,
+    paymentAddr: payTo,
+    feeAddr,
+    data: [
+      {
+        price,
+        lockTime,
+        fee,
+        signature: swapProof.signature,
+      },
+    ],
+  });
+}
+
+exports.createFixedPriceAuction = createFixedPriceAuction;
+
 class AuctionFactory {
   constructor(options) {
     const {

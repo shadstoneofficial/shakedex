@@ -1,6 +1,10 @@
 const { proposeSwap } = require('../src/swapService.js');
 const { setupSwap } = require('./hsd.js');
-const { linearReductionStrategy, Auction } = require('../src/auction.js');
+const {
+  linearReductionStrategy,
+  Auction,
+  createFixedPriceAuction,
+} = require('../src/auction.js');
 const { assert } = require('chai');
 const fs = require('fs');
 const os = require('os');
@@ -143,6 +147,29 @@ describe('Auction', () => {
           },
         ],
       });
+    });
+
+    it('should create a Bob-compatible fixed-price proof file', async () => {
+      const fixedPriceAuction = await createFixedPriceAuction({
+        context: alice,
+        lockFinalize: finalizeLock,
+        price: 42 * 1e6,
+        lockTime: 1234567890,
+        feeRate: 0,
+        feeAddr: null,
+      });
+
+      const fixedJSON = fixedPriceAuction.toJSON(alice);
+      assert.equal(fixedJSON.version, 2);
+      assert.equal(fixedJSON.name, name);
+      assert.equal(fixedJSON.data.length, 1);
+      assert.equal(fixedJSON.data[0].price, 42 * 1e6);
+      assert.equal(fixedJSON.data[0].lockTime, 1234567890);
+      assert.equal(fixedJSON.data[0].fee, 0);
+
+      const deserialized = await Auction.fromStream(JSON.stringify(fixedJSON));
+      assert.deepStrictEqual(deserialized.toJSON(alice), fixedJSON);
+      assert.isTrue(await deserialized.verifyProofs(alice));
     });
   });
 

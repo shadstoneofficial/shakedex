@@ -238,7 +238,7 @@ exports.finalizeSwap = async function (context, fulfillment) {
 
 exports.getPostFeeInfo = async function (
   context,
-  shakedexWebHost = 'https://api.shakedex.com'
+  shakedexWebHost = 'https://market.learnhns.com'
 ) {
   const res = await fetch(`${shakedexWebHost}/api/v1/fee_info`);
   if (res.status === 404) {
@@ -248,7 +248,7 @@ exports.getPostFeeInfo = async function (
     };
   }
   if (!res.ok) {
-    throw new Error('Error getting ShakeDex Web fee rate.');
+    throw new Error('Error getting LearnHNS Market fee rate.');
   }
 
   return res.json();
@@ -257,7 +257,7 @@ exports.getPostFeeInfo = async function (
 exports.postAuction = async function (
   context,
   auction,
-  shakedexWebHost = 'https://api.shakedex.com'
+  shakedexWebHost = 'https://market.learnhns.com'
 ) {
   const res = await fetch(`${shakedexWebHost}/api/v1/auctions`, {
     method: 'POST',

@@ -16,7 +16,7 @@ const {finalizeNameLockCancel} = require('../swapService.js');
 const {NameLockCancelTransfer} = require('../nameLock.js');
 const {transferNameLockCancel} = require('../swapService.js');
 const {linearReductionStrategy} = require('../auction.js');
-const {AuctionFactory, Auction} = require('../auction.js');
+const {AuctionFactory, Auction, createFixedPriceAuction} = require('../auction.js');
 const {NameLockTransfer, NameLockFinalize} = require('../nameLock.js');
 const {createLevelStore, migrate} = require('../dataStore.js');
 const {finalizeSwap} = require('../swapService.js');
@@ -49,8 +49,8 @@ program
   .option('-a, --api-key <apiKey>', 'Handshake wallet API key.')
   .option(
     '--shakedex-web-host <shakedexWebHost>',
-    'Shakedex web hostname.',
-    'https://api.shakedex.com',
+    'LearnHNS Market API host.',
+    'https://market.learnhns.com',
   )
   .option('--no-passphrase', 'Disable prompts for the wallet passphrase.');
 
@@ -101,8 +101,14 @@ program
   .action(createAuction);
 
 program
+  .command('create-fixed <name> <price>')
+  .description('Creates a fixed-price proof as a single-bid auction file. Price is expressed in HNS.')
+  .option('-o, --out <outPath>', 'Path to write the fixed-price proof JSON.')
+  .action(createFixed);
+
+program
   .command('publish-auction <auctionFile>')
-  .description('Uploads an auction file to Shakedex Web.')
+  .description('Uploads an auction file to LearnHNS Market.')
   .action(publishAuction);
 
 program
@@ -442,7 +448,7 @@ async function createAuction(name) {
     try {
       await postAuction(context, auction, shakedexWebHost);
     } catch (e) {
-      log('An error occurred posting your proof to Shakedex Web:');
+      log('An error occurred posting your proof to LearnHNS Market:');
       log(e.message);
       log(e.stack);
       log(`You can still find your proof in ${outPath}.`);
@@ -452,6 +458,87 @@ async function createAuction(name) {
   await db.putAuction(context, auction);
 
   log(`Your auction has been successfully written to ${outPath}.`);
+}
+
+async function createFixed(name, price, cmd) {
+  const {db, context} = await setupCLI();
+  const priceHNS = Number(price);
+  if (Number.isNaN(priceHNS) || priceHNS <= 0) {
+    die('Fixed price must be a positive number of HNS.');
+  }
+
+  const nameState = await db.getOutboundNameState(name);
+  if (nameState === null) {
+    die(`Name ${name} not found.`);
+  }
+  if (nameState !== 'EXTERNAL_TRANSFER' && nameState !== 'FINALIZE' && nameState !== 'AUCTION') {
+    die(`Name ${name} is not in the EXTERNAL_TRANSFER, FINALIZE, or AUCTION state.`);
+  }
+
+  if (nameState === 'AUCTION') {
+    const overwriteOkAnswer = await inquirer.prompt([
+      {
+        type: 'confirm',
+        name: 'overwriteOk',
+        message: `You have already created proof data for ${name}. Do you want to overwrite it?`,
+        default: true,
+      },
+    ]);
+
+    if (!overwriteOkAnswer.overwriteOk) {
+      die('Aborted.');
+    }
+  }
+
+  let finalize;
+  if (nameState === 'EXTERNAL_TRANSFER') {
+    const extTransferJSON = await db.getLockExternalTransfer(name);
+    const extTransfer = new NameLockExternalTransfer(extTransferJSON);
+    const confirmation = await extTransfer.getConfirmationDetails(context);
+    if (!confirmation.confirmedAt) {
+      die(
+        `The transaction finalizing ${name} to the locking script is unconfirmed. Please try again later.`,
+      );
+    }
+    finalize = new NameLockFinalize({
+      name: extTransfer.name,
+      finalizeTxHash: confirmation.finalizeTxHash,
+      finalizeOutputIdx: confirmation.finalizeOutputIdx,
+      privateKey: extTransfer.privateKey,
+      broadcastAt: confirmation.confirmedAt * 1000,
+    });
+  } else {
+    const finalizeJSON = await db.getLockFinalize(name);
+    finalize = new NameLockFinalize(finalizeJSON);
+    const confirmation = await finalize.getConfirmationDetails(context);
+    if (!confirmation.confirmedAt) {
+      die(
+        `The transaction finalizing ${name} to the locking script is unconfirmed. Please try again later.`,
+      );
+    }
+  }
+
+  const mtp = await context.getMTP();
+  const auction = await createFixedPriceAuction({
+    context,
+    lockFinalize: finalize,
+    price: Math.round(priceHNS * 1e6),
+    lockTime: mtp >>> 0,
+    feeRate: 0,
+    feeAddr: null,
+  });
+
+  let outPath = cmd.out || auction.fileName.replace('auction-', 'fixed-');
+  if (outPath[0] === '~') {
+    outPath = outPath.replace('~', process.env.HOME);
+  }
+
+  const stream = fs.createWriteStream(outPath);
+  await auction.writeToStream(context, stream);
+  await db.putAuction(context, auction);
+
+  log(`Your fixed-price proof has been successfully written to ${outPath}.`);
+  log('Upload this JSON file to LearnHNS Market to create a Buy Now listing.');
 }
 
 async function publishAuction(auctionFile) {
@@ -467,7 +554,7 @@ async function publishAuction(auctionFile) {
   try {
     await postAuction(context, auction, opts.shakedexWebHost);
   } catch (e) {
-    log('An error occurred posting your proof to Shakedex Web:');
+    log('An error occurred posting your proof to LearnHNS Market:');
     log(e.message);
     log(e.stack);
     return;
@@ -527,7 +614,7 @@ async function promptAuctionParameters(db, context, finalize, shakedexWebHost) {
     {
       type: 'confirm',
       name: 'shouldPost',
-      message: `Would you like to publish your auction to Shakedex Web at ${shakedexWebHost}?`,
+    message: `Would you like to publish your auction to LearnHNS Market at ${shakedexWebHost}?`,
       default: true,
     },
   ]);
@@ -567,12 +654,12 @@ async function promptAuctionParameters(db, context, finalize, shakedexWebHost) {
     try {
       feeInfo = await getPostFeeInfo(context, shakedexWebHost);
     } catch (e) {
-      log('An error occurred while getting fee info; not posting to Shakedex Web.');
+      log('An error occurred while getting fee info; not posting to LearnHNS Market.');
     }
 
     if (feeInfo.rate !== 0) {
       const feeOk = await confirm(
-        `The ShakeDex Web host at ${shakedexWebHost} charges a fee of ${feeInfo.rate / 100}%. Is this OK? ` +
+        `The LearnHNS Market host at ${shakedexWebHost} charges a fee of ${feeInfo.rate / 100}%. Is this OK? ` +
         `Buyers will pay this fee. If you decline, your auction's presigns will still be generated with ` +
         `a fee of zero. They will not be uploaded to the auction site.`,
         false,
