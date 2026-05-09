@@ -10,6 +10,7 @@
     "test": "mocha",
     "create-regtest-fixed-proof": "node scripts/create-regtest-fixed-proof.js",
     "start-regtest-fixed-proof-sandbox": "node scripts/start-regtest-fixed-proof-sandbox.js",
+    "test-spv-fill-swap": "node scripts/test-spv-fill-swap.js",
     "format:fix": "prettier --write ./**/*.js",
     "format:check": "prettier --check ./**/*.js"
   },
