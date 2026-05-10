@@ -6,6 +6,7 @@ const Table = require('cli-table3');
 const {finalizeNameLock} = require('../swapService.js');
 const inquirer = require('inquirer');
 const fs = require('fs');
+const fetch = require('node-fetch');
 const {log, die} = require('./util.js');
 const {postAuction} = require('../swapService.js');
 const {staticPassphraseGetter} = require('../context.js');
@@ -74,7 +75,20 @@ program
   .description(
     'Posts a name lock transaction, which when finalized allows the name to be auctioned.',
   )
+  .option('--publish-pending', 'Submit a non-buyable pending listing to LearnHNS Market after transfer-lock.')
+  .option('--expected-price <priceHns>', 'Optional expected fixed price in HNS for the pending listing.')
+  .option('--seller-note <sellerNote>', 'Optional public note for the pending listing.')
   .action(transferLock);
+
+program
+  .command('publish-pending <name>')
+  .description('Submits a non-buyable pending listing for a previously broadcast transfer-lock transaction.')
+  .option('--transfer-tx-hash <txHash>', 'Transfer-lock transaction hash. Defaults to the local shakedex DB record.')
+  .option('--transfer-output-idx <idx>', 'Transfer-lock output index when known.')
+  .option('--expected-price <priceHns>', 'Optional expected fixed price in HNS for the pending listing.')
+  .option('--seller-note <sellerNote>', 'Optional public note for the pending listing.')
+  .option('--listing-mode <mode>', 'Listing mode to announce.', 'fixed-price')
+  .action(publishPendingListing);
 
 program
   .command('finalize-lock <name>')
@@ -262,8 +276,8 @@ async function viewExternalLock(name) {
   process.stdout.write('\n');
 }
 
-async function transferLock(name) {
-  const {db, context} = await setupCLI();
+async function transferLock(name, cmd) {
+  const {db, context, opts} = await setupCLI();
 
   await confirm(
     `Your name ${name} will be transferred to a locking script. ` +
@@ -278,7 +292,114 @@ async function transferLock(name) {
       'hex',
     )}.`,
   );
+  if (cmd.publishPending) {
+    await submitPendingListing({
+      name,
+      network: opts.network,
+      transferTxHash: lockTransfer.transferTxHash.toString('hex'),
+      transferOutputIdx: lockTransfer.transferOutputIdx,
+      lockScriptAddr: lockTransfer.lockScriptAddr.toString(context.networkName),
+      listingMode: 'fixed-price',
+      expectedPriceHNS: cmd.expectedPrice,
+      sellerNote: cmd.sellerNote,
+      shakedexWebHost: opts.shakedexWebHost,
+    });
+  }
   log('Please wait at least 15 minutes for your transaction to be confirmed.');
+}
+
+async function publishPendingListing(name, cmd) {
+  const {db, context, opts} = await setupCLI();
+  let transferTxHash = cmd.transferTxHash;
+  let transferOutputIdx = cmd.transferOutputIdx;
+  let lockScriptAddr = null;
+
+  if (!transferTxHash) {
+    const transferJSON = await db.getLockTransfer(name);
+    if (!transferJSON) {
+      die(
+        `No local transfer-lock record found for ${name}. Pass --transfer-tx-hash if the transaction was created elsewhere.`,
+      );
+    }
+
+    const transfer = new NameLockTransfer(transferJSON);
+    transferTxHash = transfer.transferTxHash;
+    transferOutputIdx = transfer.transferOutputIdx;
+    lockScriptAddr = transfer.lockScriptAddr.toString(context.networkName);
+  }
+
+  await submitPendingListing({
+    name,
+    network: opts.network,
+    transferTxHash,
+    transferOutputIdx,
+    lockScriptAddr,
+    listingMode: cmd.listingMode,
+    expectedPriceHNS: cmd.expectedPrice,
+    sellerNote: cmd.sellerNote,
+    shakedexWebHost: opts.shakedexWebHost,
+  });
+}
+
+async function submitPendingListing({
+  name,
+  network,
+  transferTxHash,
+  transferOutputIdx,
+  lockScriptAddr,
+  listingMode,
+  expectedPriceHNS,
+  sellerNote,
+  shakedexWebHost,
+}) {
+  const payload = {
+    name,
+    network,
+    transferTxHash,
+    listingMode: listingMode || 'fixed-price',
+  };
+
+  if (transferOutputIdx !== undefined && transferOutputIdx !== null) {
+    payload.transferOutputIdx = Number(transferOutputIdx);
+  }
+
+  if (lockScriptAddr) {
+    payload.lockScriptAddr = lockScriptAddr;
+  }
+
+  if (expectedPriceHNS !== undefined && expectedPriceHNS !== null) {
+    const priceHNS = Number(expectedPriceHNS);
+    if (Number.isNaN(priceHNS) || priceHNS < 0) {
+      die('Expected price must be a non-negative number of HNS.');
+    }
+    payload.expectedPrice = Math.round(priceHNS * 1e6);
+  }
+
+  if (sellerNote) {
+    payload.sellerNote = sellerNote;
+  }
+
+  const baseUrl = shakedexWebHost.replace(/\/+$/, '');
+  const res = await fetch(`${baseUrl}/api/v2/pending-listings`, {
+    method: 'POST',
+    headers: {'content-type': 'application/json'},
+    body: JSON.stringify(payload),
+  });
+
+  const text = await res.text();
+  let body = {};
+  try {
+    body = JSON.parse(text);
+  } catch (e) {
+    body = {error: text};
+  }
+
+  if (!res.ok) {
+    die(`Pending listing upload failed: ${body.error || res.statusText}`);
+  }
+
+  log(`Pending listing for ${name} was submitted to ${baseUrl}.`);
+  log(`Link: ${baseUrl}/pending/${name}`);
 }
 
 async function finalizeLock(name) {
