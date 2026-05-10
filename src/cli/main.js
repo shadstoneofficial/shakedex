@@ -399,7 +399,7 @@ async function submitPendingListing({
   }
 
   log(`Pending listing for ${name} was submitted to ${baseUrl}.`);
-  log(`Link: ${baseUrl}/pending/${name}`);
+  log(`Link: ${baseUrl}/listing/${name}`);
 }
 
 async function finalizeLock(name) {
