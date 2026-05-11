@@ -118,6 +118,7 @@ program
   .command('create-fixed <name> <price>')
   .description('Creates a fixed-price proof as a single-bid auction file. Price is expressed in HNS.')
   .option('-o, --out <outPath>', 'Path to write the fixed-price proof JSON.')
+  .option('--duration-days <days>', 'Number of days the fixed-price proof remains buyable.', '7')
   .action(createFixed);
 
 program
@@ -591,6 +592,11 @@ async function createFixed(name, price, cmd) {
     die('Fixed price must be a positive number of HNS.');
   }
 
+  const durationDays = Number(cmd.durationDays);
+  if (!Number.isFinite(durationDays) || durationDays <= 0) {
+    die('Duration must be a positive number of days.');
+  }
+
   const nameState = await db.getOutboundNameState(name);
   if (nameState === null) {
     die(`Name ${name} not found.`);
@@ -647,7 +653,7 @@ async function createFixed(name, price, cmd) {
     context,
     lockFinalize: finalize,
     price: Math.round(priceHNS * 1e6),
-    lockTime: mtp >>> 0,
+    lockTime: (mtp + Math.round(durationDays * 24 * 60 * 60)) >>> 0,
     feeRate: 0,
     feeAddr: null,
   });
@@ -662,6 +668,7 @@ async function createFixed(name, price, cmd) {
   await db.putAuction(context, auction);
 
   log(`Your fixed-price proof has been successfully written to ${outPath}.`);
+  log(`This proof is buyable for about ${durationDays} day(s).`);
   log('Upload this JSON file to LearnHNS Market to create a Buy Now listing.');
 }
 
