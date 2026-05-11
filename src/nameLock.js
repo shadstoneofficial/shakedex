@@ -237,7 +237,10 @@ async function getNameOwnerConfirmation(context, options) {
   const status = await context.fetchChainData(`/api/v2/names/${name}/status`);
   const info = status && status.nameInfo && status.nameInfo.info;
   const owner = info && info.owner;
-  if (!owner || owner.hash !== expectedHash || owner.index !== expectedIndex) {
+  const expectedIndexMatches = expectedIndex === undefined ||
+    expectedIndex === null ||
+    owner.index === expectedIndex;
+  if (!owner || owner.hash !== expectedHash || !expectedIndexMatches) {
     return null;
   }
 
