@@ -117,6 +117,14 @@ class NameLockFinalize {
     try {
       tx = await context.nodeClient.getTX(this.finalizeTxHash);
     } catch (err) {
+      const coinFallback = await getCoinConfirmation(context, {
+        hash: this.finalizeTxHash,
+        index: this.finalizeOutputIdx,
+      });
+      if (coinFallback) {
+        return coinFallback;
+      }
+
       const fallback = await getNameOwnerConfirmation(context, {
         name: this.name,
         expectedHash: this.finalizeTxHash,
@@ -270,6 +278,23 @@ async function getNameOwnerConfirmation(context, options) {
   return {
     confirmedAt: Date.now() / 1000,
   };
+}
+
+async function getCoinConfirmation(context, options) {
+  try {
+    const coin = await context.nodeClient.getCoin(options.hash, options.index);
+    if (!coin || coin.height === -1) {
+      return {
+        confirmedAt: null,
+      };
+    }
+
+    return {
+      confirmedAt: Date.now() / 1000,
+    };
+  } catch (err) {
+    return null;
+  }
 }
 
 class NameLockCancelTransfer {
