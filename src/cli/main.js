@@ -175,6 +175,9 @@ function getContext(opts) {
     opts.walletId,
     opts.apiKey,
     opts.passphrase ? promptPassphraseGetter() : staticPassphraseGetter(null),
+    '127.0.0.1',
+    null,
+    opts.shakedexWebHost,
   );
 }
 

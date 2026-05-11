@@ -1,6 +1,7 @@
 const { NodeClient, WalletClient } = require('hsd/lib/client');
 const Network = require('hsd/lib/protocol/network.js');
 const passwordPrompt = require('password-prompt');
+const fetch = require('node-fetch');
 
 class Context {
   constructor(
@@ -10,6 +11,7 @@ class Context {
     passphraseGetter = noopPassphraseGetter,
     host = '127.0.0.1',
     nodeApiKey,
+    chainDataHost,
   ) {
     this.networkName = networkName;
     this.network = Network.get(networkName);
@@ -26,6 +28,59 @@ class Context {
     });
     this.wallet = this.walletClient.wallet(walletId);
     this.passphraseGetter = passphraseGetter;
+    this.chainDataHost = chainDataHost ? chainDataHost.replace(/\/+$/, '') : null;
+    this.installChainDataFallbacks();
+  }
+
+  installChainDataFallbacks() {
+    if (!this.chainDataHost) {
+      return;
+    }
+
+    const getTX = this.nodeClient.getTX.bind(this.nodeClient);
+    this.nodeClient.getTX = async (hash) => {
+      try {
+        return await getTX(hash);
+      } catch (err) {
+        if (!isSPVDataError(err)) {
+          throw err;
+        }
+
+        const body = await this.fetchChainData(`/api/v2/tx/${hash}/status`);
+        return body.tx;
+      }
+    };
+
+    const getCoin = this.nodeClient.getCoin.bind(this.nodeClient);
+    this.nodeClient.getCoin = async (hash, index) => {
+      try {
+        return await getCoin(hash, index);
+      } catch (err) {
+        if (!isSPVDataError(err)) {
+          throw err;
+        }
+
+        const body = await this.fetchChainData(`/api/v2/coin/${hash}/${index}`);
+        return body.coin;
+      }
+    };
+  }
+
+  async fetchChainData(path) {
+    const res = await fetch(`${this.chainDataHost}${path}`);
+    const text = await res.text();
+    let body = {};
+    try {
+      body = JSON.parse(text);
+    } catch (err) {
+      body = {error: text};
+    }
+
+    if (!res.ok) {
+      throw new Error(body.error || `Chain data request failed with ${res.status}`);
+    }
+
+    return body;
   }
 
   getPassphrase = () => {
@@ -68,6 +123,10 @@ exports.staticPassphraseGetter = function (passphrase) {
 
 function noopPassphraseGetter() {
   return new Promise((resolve) => resolve(null));
+}
+
+function isSPVDataError(err) {
+  return err && /SPV mode|Cannot get TX|Cannot get coin/i.test(err.message || '');
 }
 
 exports.promptPassphraseGetter = function (
