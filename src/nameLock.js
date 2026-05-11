@@ -40,8 +40,25 @@ class NameLockTransfer {
 
   async getConfirmationDetails(context) {
     const info = await context.execNode('getblockchaininfo');
-    const tx = await context.nodeClient.getTX(this.transferTxHash);
     const transferLockup = networks[context.networkName].names.transferLockup;
+    let tx;
+    try {
+      tx = await context.nodeClient.getTX(this.transferTxHash);
+    } catch (err) {
+      const fallback = await getNameOwnerConfirmation(context, {
+        name: this.name,
+        expectedHash: this.transferTxHash,
+        expectedIndex: this.transferOutputIdx,
+        chainHeight: info.blocks,
+        lockupBlocks: transferLockup,
+      });
+      if (fallback) {
+        return fallback;
+      }
+
+      throw err;
+    }
+
     const included = tx && tx.height > -1;
     return {
       confirmedAt: included ? tx.mtime : null,
@@ -96,7 +113,22 @@ class NameLockFinalize {
   }
 
   async getConfirmationDetails(context) {
-    const tx = await context.nodeClient.getTX(this.finalizeTxHash);
+    let tx;
+    try {
+      tx = await context.nodeClient.getTX(this.finalizeTxHash);
+    } catch (err) {
+      const fallback = await getNameOwnerConfirmation(context, {
+        name: this.name,
+        expectedHash: this.finalizeTxHash,
+        expectedIndex: this.finalizeOutputIdx,
+      });
+      if (fallback) {
+        return fallback;
+      }
+
+      throw err;
+    }
+
     if (tx.height === -1) {
       return {
         confirmedAt: null,
@@ -188,6 +220,54 @@ class NameLockExternalTransfer {
 }
 
 exports.NameLockExternalTransfer = NameLockExternalTransfer;
+
+async function getNameOwnerConfirmation(context, options) {
+  if (!context.chainDataHost || typeof context.fetchChainData !== 'function') {
+    return null;
+  }
+
+  const {
+    name,
+    expectedHash,
+    expectedIndex,
+    chainHeight,
+    lockupBlocks = 0,
+  } = options;
+
+  const status = await context.fetchChainData(`/api/v2/names/${name}/status`);
+  const info = status && status.nameInfo && status.nameInfo.info;
+  const owner = info && info.owner;
+  if (!owner || owner.hash !== expectedHash || owner.index !== expectedIndex) {
+    return null;
+  }
+
+  const transferHeight = info.transfer;
+  const stats = info.stats || {};
+  const lockupEnd = stats.transferLockupEnd ||
+    (typeof transferHeight === 'number' ? transferHeight + lockupBlocks : null);
+  const blocksUntilFinalize = stats.blocksUntilValidFinalize;
+
+  if (typeof lockupEnd === 'number' && typeof chainHeight === 'number') {
+    const spendableIn = Math.max(lockupEnd - chainHeight, 0);
+    return {
+      confirmedAt: Date.now() / 1000,
+      spendable: spendableIn === 0,
+      spendableIn,
+    };
+  }
+
+  if (typeof blocksUntilFinalize === 'number') {
+    return {
+      confirmedAt: Date.now() / 1000,
+      spendable: blocksUntilFinalize <= 0,
+      spendableIn: Math.max(blocksUntilFinalize, 0),
+    };
+  }
+
+  return {
+    confirmedAt: Date.now() / 1000,
+  };
+}
 
 class NameLockCancelTransfer {
   constructor(options) {
