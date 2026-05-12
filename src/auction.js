@@ -224,6 +224,7 @@ class Auction {
       paymentAddr,
       data,
       feeAddr,
+      expiresAt,
     } = options;
 
     this.version = CURRENT_PROTOCOL_VERSION;
@@ -233,6 +234,7 @@ class Auction {
     this.publicKey = coerceBuffer(publicKey);
     this.paymentAddr = coerceAddress(paymentAddr);
     this.feeAddr = feeAddr ? coerceAddress(feeAddr) : null;
+    this.expiresAt = expiresAt || null;
 
     this.data = [];
     for (const datum of data) {
@@ -315,7 +317,7 @@ class Auction {
   }
 
   toJSON(context) {
-    return {
+    const json = {
       version: this.version,
       name: this.name,
       lockingTxHash: this.lockingTxHash.toString('hex'),
@@ -330,6 +332,12 @@ class Auction {
         signature: d.signature.toString('hex'),
       })),
     };
+
+    if (this.expiresAt) {
+      json.expiresAt = this.expiresAt;
+    }
+
+    return json;
   }
 
   async writeToStream(context, stream) {
